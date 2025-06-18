@@ -1,0 +1,183 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  firstName String
+  lastName  String
+  role      Role     @default(STUDENT)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  lastLogin DateTime?
+
+  // Relations
+  student               Student?
+  brigadeLeadBrigades   Brigade[]
+  markedAttendance      AttendanceRecord[] @relation("MarkedBy")
+  userNotifications     UserNotification[]
+
+  @@map("users")
+}
+
+model Student {
+  id             String   @id @default(cuid())
+  tempRollNumber String   @unique
+  firstName      String
+  lastName       String
+  email          String?
+  phone          String?
+  brigadeId      String?
+  userId         String?  @unique
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  // Relations
+  brigade           Brigade?           @relation(fields: [brigadeId], references: [id])
+  user              User?              @relation(fields: [userId], references: [id])
+  attendanceRecords AttendanceRecord[]
+
+  @@map("students")
+}
+
+model Brigade {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  leaderId  String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  leader   User?      @relation(fields: [leaderId], references: [id])
+  students Student[]
+
+  @@map("brigades")
+}
+
+model Event {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  startDate   DateTime
+  endDate     DateTime
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  eventDays EventDay[]
+
+  @@map("events")
+}
+
+model EventDay {
+  id          String   @id @default(cuid())
+  eventId     String
+  date        DateTime
+  fnEnabled   Boolean  @default(true)
+  anEnabled   Boolean  @default(true)
+  fnStartTime String   @default("09:00")
+  fnEndTime   String   @default("09:30")
+  anStartTime String   @default("14:00")
+  anEndTime   String   @default("14:30")
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  event             Event              @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  attendanceRecords AttendanceRecord[]
+
+  @@map("event_days")
+}
+
+model AttendanceRecord {
+  id         String           @id @default(cuid())
+  studentId  String
+  eventDayId String
+  session    Session
+  status     AttendanceStatus @default(PRESENT)
+  markedAt   DateTime         @default(now())
+  markedBy   String?
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+
+  // Relations
+  student  Student   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  eventDay EventDay  @relation(fields: [eventDayId], references: [id], onDelete: Cascade)
+  marker   User?     @relation("MarkedBy", fields: [markedBy], references: [id])
+
+  @@unique([studentId, eventDayId, session])
+  @@map("attendance_records")
+}
+
+model Notification {
+  id         String            @id @default(cuid())
+  title      String
+  message    String
+  type       NotificationType  @default(INFO)
+  targetRole Role?
+  isGlobal   Boolean           @default(false)
+  isActive   Boolean           @default(true)
+  expiresAt  DateTime?
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  // Relations
+  userNotifications UserNotification[]
+
+  @@map("notifications")
+}
+
+model UserNotification {
+  id             String   @id @default(cuid())
+  userId         String
+  notificationId String
+  isRead         Boolean  @default(false)
+  readAt         DateTime?
+  createdAt      DateTime @default(now())
+
+  // Relations
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  notification Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, notificationId])
+  @@map("user_notifications")
+}
+
+enum Role {
+  ADMIN
+  BRIGADE_LEAD
+  STUDENT
+}
+
+enum Session {
+  FN
+  AN
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  LATE
+}
+
+enum NotificationType {
+  INFO
+  WARNING
+  ERROR
+  SUCCESS
+}
