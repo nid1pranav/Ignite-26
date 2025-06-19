@@ -1,31 +1,31 @@
-import express from 'express';
-import bcrypt from 'bcryptjs';
-import { PrismaClient } from '@prisma/client';
-import { body, validationResult } from 'express-validator';
-import { requireAdmin } from '../middleware/auth.js';
-import { logger } from '../utils/logger.js';
+import { Hono } from 'hono'
+import bcrypt from 'bcryptjs'
+import { authenticateToken, requireAdmin } from '../middleware/auth.js'
 
-const router = express.Router();
-const prisma = new PrismaClient();
+const app = new Hono()
+
+// Apply authentication middleware
+app.use('*', authenticateToken)
 
 // Get all users (Admin only)
-router.get('/', requireAdmin, async (req, res) => {
+app.get('/', requireAdmin, async (c) => {
   try {
-    const { page = 1, limit = 10, role, search } = req.query;
-    const skip = (page - 1) * limit;
+    const { page = 1, limit = 10, role, search } = c.req.query()
+    const skip = (page - 1) * limit
+    const prisma = c.get('prisma')
 
-    let whereClause = { isActive: true };
+    let whereClause = { isActive: true }
 
     if (role) {
-      whereClause.role = role;
+      whereClause.role = role
     }
 
     if (search) {
       whereClause.OR = [
-        { firstName: { contains: search, mode: 'insensitive' } },
-        { lastName: { contains: search, mode: 'insensitive' } },
-        { email: { contains: search, mode: 'insensitive' } }
-      ];
+        { firstName: { contains: search } },
+        { lastName: { contains: search } },
+        { email: { contains: search } }
+      ]
     }
 
     const [users, total] = await Promise.all([
@@ -57,9 +57,9 @@ router.get('/', requireAdmin, async (req, res) => {
         orderBy: { createdAt: 'desc' }
       }),
       prisma.user.count({ where: whereClause })
-    ]);
+    ])
 
-    res.json({
+    return c.json({
       users,
       pagination: {
         currentPage: parseInt(page),
@@ -67,39 +67,41 @@ router.get('/', requireAdmin, async (req, res) => {
         totalItems: total,
         itemsPerPage: parseInt(limit)
       }
-    });
+    })
   } catch (error) {
-    logger.error('Get users error:', error);
-    res.status(500).json({ error: 'Failed to fetch users' });
+    console.error('Get users error:', error)
+    return c.json({ error: 'Failed to fetch users' }, 500)
   }
-});
+})
 
 // Create user (Admin only)
-router.post('/', requireAdmin, [
-  body('email').isEmail().normalizeEmail(),
-  body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
-  body('firstName').isLength({ min: 1 }).withMessage('First name is required'),
-  body('lastName').isLength({ min: 1 }).withMessage('Last name is required'),
-  body('role').isIn(['ADMIN', 'BRIGADE_LEAD', 'STUDENT']).withMessage('Invalid role')
-], async (req, res) => {
+app.post('/', requireAdmin, async (c) => {
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
+    const { email, password, firstName, lastName, role } = await c.req.json()
+    const prisma = c.get('prisma')
+
+    if (!email || !password || !firstName || !lastName || !role) {
+      return c.json({ error: 'All fields are required' }, 400)
     }
 
-    const { email, password, firstName, lastName, role } = req.body;
+    if (password.length < 6) {
+      return c.json({ error: 'Password must be at least 6 characters' }, 400)
+    }
+
+    if (!['ADMIN', 'BRIGADE_LEAD', 'STUDENT'].includes(role)) {
+      return c.json({ error: 'Invalid role' }, 400)
+    }
 
     // Check if user already exists
     const existingUser = await prisma.user.findUnique({
       where: { email }
-    });
+    })
 
     if (existingUser) {
-      return res.status(400).json({ error: 'User with this email already exists' });
+      return c.json({ error: 'User with this email already exists' }, 400)
     }
 
-    const hashedPassword = await bcrypt.hash(password, 10);
+    const hashedPassword = await bcrypt.hash(password, 10)
 
     const user = await prisma.user.create({
       data: {
@@ -118,188 +120,51 @@ router.post('/', requireAdmin, [
         isActive: true,
         createdAt: true
       }
-    });
+    })
 
-    logger.info(`User created: ${email} (${role}) by ${req.user.email}`);
-    res.status(201).json(user);
+    return c.json(user, 201)
   } catch (error) {
-    logger.error('Create user error:', error);
-    res.status(500).json({ error: 'Failed to create user' });
+    console.error('Create user error:', error)
+    return c.json({ error: 'Failed to create user' }, 500)
   }
-});
-
-// Update user (Admin only)
-router.put('/:id', requireAdmin, [
-  body('email').optional().isEmail().normalizeEmail(),
-  body('firstName').optional().isLength({ min: 1 }),
-  body('lastName').optional().isLength({ min: 1 }),
-  body('role').optional().isIn(['ADMIN', 'BRIGADE_LEAD', 'STUDENT']),
-  body('isActive').optional().isBoolean()
-], async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-
-    const { id } = req.params;
-    const updateData = req.body;
-
-    // Don't allow password updates through this endpoint
-    delete updateData.password;
-
-    // Check if email is being changed and is unique
-    if (updateData.email) {
-      const existingUser = await prisma.user.findFirst({
-        where: {
-          email: updateData.email,
-          id: { not: id }
-        }
-      });
-
-      if (existingUser) {
-        return res.status(400).json({ error: 'Email already in use' });
-      }
-    }
-
-    const user = await prisma.user.update({
-      where: { id },
-      data: updateData,
-      select: {
-        id: true,
-        email: true,
-        firstName: true,
-        lastName: true,
-        role: true,
-        isActive: true,
-        createdAt: true,
-        lastLogin: true
-      }
-    });
-
-    logger.info(`User updated: ${user.email} by ${req.user.email}`);
-    res.json(user);
-  } catch (error) {
-    logger.error('Update user error:', error);
-    res.status(500).json({ error: 'Failed to update user' });
-  }
-});
-
-// Reset user password (Admin only)
-router.put('/:id/reset-password', requireAdmin, [
-  body('newPassword').isLength({ min: 6 }).withMessage('Password must be at least 6 characters')
-], async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-
-    const { id } = req.params;
-    const { newPassword } = req.body;
-
-    const hashedPassword = await bcrypt.hash(newPassword, 10);
-
-    const user = await prisma.user.update({
-      where: { id },
-      data: { password: hashedPassword },
-      select: { id: true, email: true, firstName: true, lastName: true }
-    });
-
-    logger.info(`Password reset for user: ${user.email} by ${req.user.email}`);
-    res.json({ message: 'Password reset successfully' });
-  } catch (error) {
-    logger.error('Reset password error:', error);
-    res.status(500).json({ error: 'Failed to reset password' });
-  }
-});
+})
 
 // Change own password
-router.put('/change-password', [
-  body('currentPassword').isLength({ min: 1 }).withMessage('Current password is required'),
-  body('newPassword').isLength({ min: 6 }).withMessage('New password must be at least 6 characters')
-], async (req, res) => {
+app.put('/change-password', async (c) => {
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
+    const { currentPassword, newPassword } = await c.req.json()
+    const user = c.get('user')
+    const prisma = c.get('prisma')
+
+    if (!currentPassword || !newPassword) {
+      return c.json({ error: 'Current password and new password are required' }, 400)
     }
 
-    const { currentPassword, newPassword } = req.body;
+    if (newPassword.length < 6) {
+      return c.json({ error: 'New password must be at least 6 characters' }, 400)
+    }
 
-    const user = await prisma.user.findUnique({
-      where: { id: req.user.id }
-    });
+    const userRecord = await prisma.user.findUnique({
+      where: { id: user.id }
+    })
 
-    const isValidPassword = await bcrypt.compare(currentPassword, user.password);
+    const isValidPassword = await bcrypt.compare(currentPassword, userRecord.password)
     if (!isValidPassword) {
-      return res.status(400).json({ error: 'Current password is incorrect' });
+      return c.json({ error: 'Current password is incorrect' }, 400)
     }
 
-    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    const hashedPassword = await bcrypt.hash(newPassword, 10)
 
     await prisma.user.update({
-      where: { id: req.user.id },
+      where: { id: user.id },
       data: { password: hashedPassword }
-    });
+    })
 
-    logger.info(`Password changed by user: ${user.email}`);
-    res.json({ message: 'Password changed successfully' });
+    return c.json({ message: 'Password changed successfully' })
   } catch (error) {
-    logger.error('Change password error:', error);
-    res.status(500).json({ error: 'Failed to change password' });
+    console.error('Change password error:', error)
+    return c.json({ error: 'Failed to change password' }, 500)
   }
-});
+})
 
-// Delete user (Admin only)
-router.delete('/:id', requireAdmin, async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    // Prevent self-deletion
-    if (id === req.user.id) {
-      return res.status(400).json({ error: 'Cannot delete your own account' });
-    }
-
-    const user = await prisma.user.findUnique({
-      where: { id },
-      include: {
-        student: true,
-        brigadeLeadBrigades: true
-      }
-    });
-
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    // Check if user has dependencies
-    if (user.brigadeLeadBrigades.length > 0) {
-      return res.status(400).json({ 
-        error: 'Cannot delete user who is leading brigades. Please reassign brigades first.' 
-      });
-    }
-
-    // Soft delete
-    await prisma.user.update({
-      where: { id },
-      data: { isActive: false }
-    });
-
-    // Also deactivate associated student if exists
-    if (user.student) {
-      await prisma.student.update({
-        where: { id: user.student.id },
-        data: { isActive: false }
-      });
-    }
-
-    logger.info(`User deleted: ${user.email} by ${req.user.email}`);
-    res.json({ message: 'User deleted successfully' });
-  } catch (error) {
-    logger.error('Delete user error:', error);
-    res.status(500).json({ error: 'Failed to delete user' });
-  }
-});
-
-export default router;
+export default app

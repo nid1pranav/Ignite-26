@@ -1,15 +1,16 @@
-import express from 'express';
-import { PrismaClient } from '@prisma/client';
-import { body, validationResult } from 'express-validator';
-import { requireAdmin } from '../middleware/auth.js';
-import { logger } from '../utils/logger.js';
+import { Hono } from 'hono'
+import { authenticateToken, requireAdmin } from '../middleware/auth.js'
 
-const router = express.Router();
-const prisma = new PrismaClient();
+const app = new Hono()
+
+// Apply authentication middleware
+app.use('*', authenticateToken)
 
 // Get all events
-router.get('/', async (req, res) => {
+app.get('/', async (c) => {
   try {
+    const prisma = c.get('prisma')
+    
     const events = await prisma.event.findMany({
       where: { isActive: true },
       include: {
@@ -18,19 +19,20 @@ router.get('/', async (req, res) => {
         }
       },
       orderBy: { startDate: 'desc' }
-    });
+    })
 
-    res.json(events);
+    return c.json(events)
   } catch (error) {
-    logger.error('Get events error:', error);
-    res.status(500).json({ error: 'Failed to fetch events' });
+    console.error('Get events error:', error)
+    return c.json({ error: 'Failed to fetch events' }, 500)
   }
-});
+})
 
 // Get current active event
-router.get('/current', async (req, res) => {
+app.get('/current', async (c) => {
   try {
-    const now = new Date();
+    const prisma = c.get('prisma')
+    const now = new Date()
     
     const currentEvent = await prisma.event.findFirst({
       where: {
@@ -43,36 +45,37 @@ router.get('/current', async (req, res) => {
           orderBy: { date: 'asc' }
         }
       }
-    });
+    })
 
     if (!currentEvent) {
-      return res.status(404).json({ error: 'No active event found' });
+      return c.json({ error: 'No active event found' }, 404)
     }
 
     // Find current day
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
     
     const currentDay = currentEvent.eventDays.find(day => {
-      const eventDate = new Date(day.date);
-      eventDate.setHours(0, 0, 0, 0);
-      return eventDate.getTime() === today.getTime();
-    });
+      const eventDate = new Date(day.date)
+      eventDate.setHours(0, 0, 0, 0)
+      return eventDate.getTime() === today.getTime()
+    })
 
-    res.json({
+    return c.json({
       event: currentEvent,
       currentDay: currentDay || null
-    });
+    })
   } catch (error) {
-    logger.error('Get current event error:', error);
-    res.status(500).json({ error: 'Failed to fetch current event' });
+    console.error('Get current event error:', error)
+    return c.json({ error: 'Failed to fetch current event' }, 500)
   }
-});
+})
 
 // Get single event
-router.get('/:id', async (req, res) => {
+app.get('/:id', async (c) => {
   try {
-    const { id } = req.params;
+    const { id } = c.req.param()
+    const prisma = c.get('prisma')
 
     const event = await prisma.event.findUnique({
       where: { id },
@@ -81,40 +84,35 @@ router.get('/:id', async (req, res) => {
           orderBy: { date: 'asc' }
         }
       }
-    });
+    })
 
     if (!event) {
-      return res.status(404).json({ error: 'Event not found' });
+      return c.json({ error: 'Event not found' }, 404)
     }
 
-    res.json(event);
+    return c.json(event)
   } catch (error) {
-    logger.error('Get event error:', error);
-    res.status(500).json({ error: 'Failed to fetch event' });
+    console.error('Get event error:', error)
+    return c.json({ error: 'Failed to fetch event' }, 500)
   }
-});
+})
 
 // Create event (Admin only)
-router.post('/', requireAdmin, [
-  body('name').isLength({ min: 1 }).withMessage('Event name is required'),
-  body('startDate').isISO8601().withMessage('Valid start date is required'),
-  body('endDate').isISO8601().withMessage('Valid end date is required'),
-  body('eventDays').isArray().withMessage('Event days must be an array')
-], async (req, res) => {
+app.post('/', requireAdmin, async (c) => {
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
+    const { name, description, startDate, endDate, eventDays } = await c.req.json()
+    const prisma = c.get('prisma')
+
+    if (!name || !startDate || !endDate || !eventDays) {
+      return c.json({ error: 'Name, start date, end date, and event days are required' }, 400)
     }
 
-    const { name, description, startDate, endDate, eventDays } = req.body;
-
     // Validate date range
-    const start = new Date(startDate);
-    const end = new Date(endDate);
+    const start = new Date(startDate)
+    const end = new Date(endDate)
     
     if (end <= start) {
-      return res.status(400).json({ error: 'End date must be after start date' });
+      return c.json({ error: 'End date must be after start date' }, 400)
     }
 
     // Create event with days in transaction
@@ -126,7 +124,7 @@ router.post('/', requireAdmin, [
           startDate: start,
           endDate: end
         }
-      });
+      })
 
       // Create event days
       const eventDayData = eventDays.map(day => ({
@@ -138,11 +136,11 @@ router.post('/', requireAdmin, [
         fnEndTime: day.fnEndTime || '09:30',
         anStartTime: day.anStartTime || '14:00',
         anEndTime: day.anEndTime || '14:30'
-      }));
+      }))
 
       await prisma.eventDay.createMany({
         data: eventDayData
-      });
+      })
 
       return prisma.event.findUnique({
         where: { id: newEvent.id },
@@ -151,167 +149,94 @@ router.post('/', requireAdmin, [
             orderBy: { date: 'asc' }
           }
         }
-      });
-    });
+      })
+    })
 
-    logger.info(`Event created: ${name} by ${req.user.email}`);
-    res.status(201).json(event);
+    return c.json(event, 201)
   } catch (error) {
-    logger.error('Create event error:', error);
-    res.status(500).json({ error: 'Failed to create event' });
+    console.error('Create event error:', error)
+    return c.json({ error: 'Failed to create event' }, 500)
   }
-});
+})
 
 // Update event (Admin only)
-router.put('/:id', requireAdmin, [
-  body('name').optional().isLength({ min: 1 }).withMessage('Event name cannot be empty'),
-  body('startDate').optional().isISO8601().withMessage('Valid start date is required'),
-  body('endDate').optional().isISO8601().withMessage('Valid end date is required')
-], async (req, res) => {
+app.put('/:id', requireAdmin, async (c) => {
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-
-    const { id } = req.params;
-    const updateData = req.body;
+    const { id } = c.req.param()
+    const updateData = await c.req.json()
+    const prisma = c.get('prisma')
 
     // Validate date range if both dates provided
     if (updateData.startDate && updateData.endDate) {
-      const start = new Date(updateData.startDate);
-      const end = new Date(updateData.endDate);
+      const start = new Date(updateData.startDate)
+      const end = new Date(updateData.endDate)
       
       if (end <= start) {
-        return res.status(400).json({ error: 'End date must be after start date' });
+        return c.json({ error: 'End date must be after start date' }, 400)
       }
     }
 
+    const data = { ...updateData }
+    if (updateData.startDate) data.startDate = new Date(updateData.startDate)
+    if (updateData.endDate) data.endDate = new Date(updateData.endDate)
+
     const event = await prisma.event.update({
       where: { id },
-      data: {
-        ...updateData,
-        ...(updateData.startDate && { startDate: new Date(updateData.startDate) }),
-        ...(updateData.endDate && { endDate: new Date(updateData.endDate) })
-      },
+      data,
       include: {
         eventDays: {
           orderBy: { date: 'asc' }
         }
       }
-    });
+    })
 
-    logger.info(`Event updated: ${event.name} by ${req.user.email}`);
-    res.json(event);
+    return c.json(event)
   } catch (error) {
-    logger.error('Update event error:', error);
-    res.status(500).json({ error: 'Failed to update event' });
+    console.error('Update event error:', error)
+    return c.json({ error: 'Failed to update event' }, 500)
   }
-});
-
-// Update event day
-router.put('/days/:dayId', requireAdmin, [
-  body('fnEnabled').optional().isBoolean(),
-  body('anEnabled').optional().isBoolean(),
-  body('fnStartTime').optional().matches(/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/).withMessage('Invalid time format'),
-  body('fnEndTime').optional().matches(/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/).withMessage('Invalid time format'),
-  body('anStartTime').optional().matches(/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/).withMessage('Invalid time format'),
-  body('anEndTime').optional().matches(/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/).withMessage('Invalid time format')
-], async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-
-    const { dayId } = req.params;
-    const updateData = req.body;
-
-    const eventDay = await prisma.eventDay.update({
-      where: { id: dayId },
-      data: updateData,
-      include: {
-        event: true
-      }
-    });
-
-    logger.info(`Event day updated: ${eventDay.date} by ${req.user.email}`);
-    res.json(eventDay);
-  } catch (error) {
-    logger.error('Update event day error:', error);
-    res.status(500).json({ error: 'Failed to update event day' });
-  }
-});
-
-// Get event days
-router.get('/:id/days', async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    const eventDays = await prisma.eventDay.findMany({
-      where: { eventId: id, isActive: true },
-      include: {
-        _count: {
-          select: {
-            attendanceRecords: true
-          }
-        }
-      },
-      orderBy: { date: 'asc' }
-    });
-
-    res.json(eventDays);
-  } catch (error) {
-    logger.error('Get event days error:', error);
-    res.status(500).json({ error: 'Failed to fetch event days' });
-  }
-});
+})
 
 // Delete event (Admin only)
-router.delete('/:id', requireAdmin, async (req, res) => {
+app.delete('/:id', requireAdmin, async (c) => {
   try {
-    const { id } = req.params;
+    const { id } = c.req.param()
+    const prisma = c.get('prisma')
 
     const event = await prisma.event.findUnique({
-      where: { id },
-      include: {
-        _count: {
-          select: {
-            eventDays: {
-              where: {
-                attendanceRecords: {
-                  some: {}
-                }
-              }
-            }
-          }
-        }
-      }
-    });
+      where: { id }
+    })
 
     if (!event) {
-      return res.status(404).json({ error: 'Event not found' });
+      return c.json({ error: 'Event not found' }, 404)
     }
 
     // Check if event has attendance records
-    if (event._count.eventDays > 0) {
-      return res.status(400).json({ 
+    const attendanceCount = await prisma.attendanceRecord.count({
+      where: {
+        eventDay: {
+          eventId: id
+        }
+      }
+    })
+
+    if (attendanceCount > 0) {
+      return c.json({ 
         error: 'Cannot delete event with attendance records. Please archive the event instead.' 
-      });
+      }, 400)
     }
 
     // Soft delete
     await prisma.event.update({
       where: { id },
       data: { isActive: false }
-    });
+    })
 
-    logger.info(`Event deleted: ${event.name} by ${req.user.email}`);
-    res.json({ message: 'Event deleted successfully' });
+    return c.json({ message: 'Event deleted successfully' })
   } catch (error) {
-    logger.error('Delete event error:', error);
-    res.status(500).json({ error: 'Failed to delete event' });
+    console.error('Delete event error:', error)
+    return c.json({ error: 'Failed to delete event' }, 500)
   }
-});
+})
 
-export default router;
+export default app

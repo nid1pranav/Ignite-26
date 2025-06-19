@@ -3,35 +3,31 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "nodemon src/server.js",
-    "start": "node src/server.js",
+    "dev": "wrangler dev --local",
+    "deploy": "wrangler deploy",
+    "deploy:staging": "wrangler deploy --env staging",
     "build": "echo 'Backend build complete'",
-    "db:generate": "npx prisma generate",
-    "db:push": "npx prisma db push",
-    "db:seed": "npx prisma db seed"
+    "db:generate": "npx prisma generate --schema=./prisma/schema.prisma",
+    "db:migrate": "wrangler d1 migrations apply ignite-2026-local --local",
+    "db:migrate:prod": "wrangler d1 migrations apply ignite-2026-prod",
+    "db:seed": "wrangler d1 execute ignite-2026-local --local --file=./prisma/seed.sql",
+    "db:seed:prod": "wrangler d1 execute ignite-2026-prod --file=./prisma/seed.sql",
+    "db:studio": "npx prisma studio --schema=./prisma/schema.prisma",
+    "cf:login": "wrangler auth login",
+    "cf:d1:create": "wrangler d1 create ignite-2026-prod"
   },
   "dependencies": {
     "@prisma/client": "^5.19.1",
     "bcryptjs": "^2.4.3",
-    "cors": "^2.8.5",
-    "dotenv": "^16.4.5",
-    "express": "^4.19.2",
-    "express-rate-limit": "^7.4.0",
-    "express-validator": "^7.2.0",
-    "helmet": "^7.1.0",
+    "hono": "^3.12.0",
     "jsonwebtoken": "^9.0.2",
-    "multer": "^1.4.5-lts.1",
-    "nodemailer": "^6.9.14",
-    "pdf-lib": "^1.17.1",
-    "socket.io": "^4.7.5",
     "winston": "^3.13.1",
-    "xlsx": "^0.18.5"
+    "@prisma/adapter-d1": "^5.19.1"
   },
   "devDependencies": {
-    "nodemon": "^3.1.4",
-    "prisma": "^5.22.0"
-  },
-  "prisma": {
-    "seed": "node prisma/seed.js"
+    "wrangler": "^3.78.0",
+    "prisma": "^5.22.0",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/jsonwebtoken": "^9.0.6"
   }
 }

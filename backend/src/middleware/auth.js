@@ -1,49 +1,50 @@
-import jwt from 'jsonwebtoken';
-import { PrismaClient } from '@prisma/client';
+import jwt from 'jsonwebtoken'
 
-const prisma = new PrismaClient();
-
-export const authenticateToken = async (req, res, next) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
+export const authenticateToken = async (c, next) => {
+  const authHeader = c.req.header('authorization')
+  const token = authHeader && authHeader.split(' ')[1]
 
   if (!token) {
-    return res.status(401).json({ error: 'Access token required' });
+    return c.json({ error: 'Access token required' }, 401)
   }
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, c.env.JWT_SECRET)
+    const prisma = c.get('prisma')
+    
     const user = await prisma.user.findUnique({
       where: { id: decoded.userId },
       include: {
         student: true
       }
-    });
+    })
 
     if (!user || !user.isActive) {
-      return res.status(403).json({ error: 'User not found or inactive' });
+      return c.json({ error: 'User not found or inactive' }, 403)
     }
 
-    req.user = user;
-    next();
+    c.set('user', user)
+    await next()
   } catch (error) {
-    return res.status(403).json({ error: 'Invalid or expired token' });
+    return c.json({ error: 'Invalid or expired token' }, 403)
   }
-};
+}
 
 export const requireRole = (roles) => {
-  return (req, res, next) => {
-    if (!req.user) {
-      return res.status(401).json({ error: 'Authentication required' });
+  return async (c, next) => {
+    const user = c.get('user')
+    
+    if (!user) {
+      return c.json({ error: 'Authentication required' }, 401)
     }
 
-    if (!roles.includes(req.user.role)) {
-      return res.status(403).json({ error: 'Insufficient permissions' });
+    if (!roles.includes(user.role)) {
+      return c.json({ error: 'Insufficient permissions' }, 403)
     }
 
-    next();
-  };
-};
+    await next()
+  }
+}
 
-export const requireAdminOrBrigadeLead = requireRole(['ADMIN', 'BRIGADE_LEAD']);
-export const requireAdmin = requireRole(['ADMIN']);
+export const requireAdminOrBrigadeLead = requireRole(['ADMIN', 'BRIGADE_LEAD'])
+export const requireAdmin = requireRole(['ADMIN'])

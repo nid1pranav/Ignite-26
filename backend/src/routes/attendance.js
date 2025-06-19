@@ -1,47 +1,48 @@
-import express from 'express';
-import { PrismaClient } from '@prisma/client';
-import { body, validationResult } from 'express-validator';
-import { requireAdminOrBrigadeLead } from '../middleware/auth.js';
-import { logger } from '../utils/logger.js';
+import { Hono } from 'hono'
+import { authenticateToken, requireAdminOrBrigadeLead } from '../middleware/auth.js'
 
-const router = express.Router();
-const prisma = new PrismaClient();
+const app = new Hono()
+
+// Apply authentication middleware
+app.use('*', authenticateToken)
 
 // Get attendance records
-router.get('/', async (req, res) => {
+app.get('/', async (c) => {
   try {
-    const { eventDayId, brigadeId, session, page = 1, limit = 50 } = req.query;
-    const skip = (page - 1) * limit;
+    const { eventDayId, brigadeId, session, page = 1, limit = 50 } = c.req.query()
+    const skip = (page - 1) * limit
+    const user = c.get('user')
+    const prisma = c.get('prisma')
 
-    let whereClause = {};
+    let whereClause = {}
 
     // Role-based filtering
-    if (req.user.role === 'BRIGADE_LEAD') {
+    if (user.role === 'BRIGADE_LEAD') {
       const brigades = await prisma.brigade.findMany({
-        where: { leaderId: req.user.id }
-      });
-      const brigadeIds = brigades.map(b => b.id);
+        where: { leaderId: user.id }
+      })
+      const brigadeIds = brigades.map(b => b.id)
       
       whereClause.student = {
         brigadeId: { in: brigadeIds }
-      };
-    } else if (req.user.role === 'STUDENT') {
+      }
+    } else if (user.role === 'STUDENT') {
       whereClause.student = {
-        userId: req.user.id
-      };
+        userId: user.id
+      }
     }
 
     // Filters
     if (eventDayId) {
-      whereClause.eventDayId = eventDayId;
+      whereClause.eventDayId = eventDayId
     }
     if (session) {
-      whereClause.session = session;
+      whereClause.session = session
     }
-    if (brigadeId && req.user.role === 'ADMIN') {
+    if (brigadeId && user.role === 'ADMIN') {
       whereClause.student = {
         brigadeId: brigadeId
-      };
+      }
     }
 
     const [records, total] = await Promise.all([
@@ -64,9 +65,9 @@ router.get('/', async (req, res) => {
         orderBy: { createdAt: 'desc' }
       }),
       prisma.attendanceRecord.count({ where: whereClause })
-    ]);
+    ])
 
-    res.json({
+    return c.json({
       records,
       pagination: {
         currentPage: parseInt(page),
@@ -74,87 +75,69 @@ router.get('/', async (req, res) => {
         totalItems: total,
         itemsPerPage: parseInt(limit)
       }
-    });
+    })
   } catch (error) {
-    logger.error('Get attendance records error:', error);
-    res.status(500).json({ error: 'Failed to fetch attendance records' });
+    console.error('Get attendance records error:', error)
+    return c.json({ error: 'Failed to fetch attendance records' }, 500)
   }
-});
+})
 
 // Mark attendance
-router.post('/mark', requireAdminOrBrigadeLead, [
-  body('studentId').isLength({ min: 1 }).withMessage('Student ID is required'),
-  body('eventDayId').isLength({ min: 1 }).withMessage('Event day ID is required'),
-  body('session').isIn(['FN', 'AN']).withMessage('Invalid session'),
-  body('status').optional().isIn(['PRESENT', 'ABSENT', 'LATE']).withMessage('Invalid status')
-], async (req, res) => {
+app.post('/mark', requireAdminOrBrigadeLead, async (c) => {
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
+    const { studentId, eventDayId, session, status = 'PRESENT' } = await c.req.json()
+    const user = c.get('user')
+    const prisma = c.get('prisma')
+
+    if (!studentId || !eventDayId || !session) {
+      return c.json({ error: 'Student ID, event day ID, and session are required' }, 400)
     }
 
-    const { studentId, eventDayId, session, status = 'PRESENT' } = req.body;
+    if (!['FN', 'AN'].includes(session)) {
+      return c.json({ error: 'Invalid session' }, 400)
+    }
+
+    if (!['PRESENT', 'ABSENT', 'LATE'].includes(status)) {
+      return c.json({ error: 'Invalid status' }, 400)
+    }
 
     // Check if student exists and user has permission
     const student = await prisma.student.findUnique({
       where: { id: studentId },
       include: { brigade: true }
-    });
+    })
 
     if (!student) {
-      return res.status(404).json({ error: 'Student not found' });
+      return c.json({ error: 'Student not found' }, 404)
     }
 
     // Check permissions for brigade leads
-    if (req.user.role === 'BRIGADE_LEAD') {
+    if (user.role === 'BRIGADE_LEAD') {
       const brigades = await prisma.brigade.findMany({
-        where: { leaderId: req.user.id }
-      });
-      const brigadeIds = brigades.map(b => b.id);
+        where: { leaderId: user.id }
+      })
+      const brigadeIds = brigades.map(b => b.id)
       
       if (!brigadeIds.includes(student.brigadeId)) {
-        return res.status(403).json({ error: 'Access denied to this student' });
+        return c.json({ error: 'Access denied to this student' }, 403)
       }
     }
 
     // Check if event day exists and is active
     const eventDay = await prisma.eventDay.findUnique({
       where: { id: eventDayId }
-    });
+    })
 
     if (!eventDay || !eventDay.isActive) {
-      return res.status(404).json({ error: 'Event day not found or inactive' });
+      return c.json({ error: 'Event day not found or inactive' }, 404)
     }
 
     // Check session availability
     if (session === 'FN' && !eventDay.fnEnabled) {
-      return res.status(400).json({ error: 'Forenoon session is not enabled for this day' });
+      return c.json({ error: 'Forenoon session is not enabled for this day' }, 400)
     }
     if (session === 'AN' && !eventDay.anEnabled) {
-      return res.status(400).json({ error: 'Afternoon session is not enabled for this day' });
-    }
-
-    // Check time constraints
-    const now = new Date();
-    const currentTime = now.toTimeString().substring(0, 5); // HH:MM format
-    const currentDate = now.toDateString();
-    const eventDate = eventDay.date.toDateString();
-
-    if (currentDate === eventDate) {
-      if (session === 'FN') {
-        if (currentTime < eventDay.fnStartTime || currentTime > eventDay.fnEndTime) {
-          return res.status(400).json({ 
-            error: `Forenoon attendance can only be marked between ${eventDay.fnStartTime} - ${eventDay.fnEndTime}` 
-          });
-        }
-      } else if (session === 'AN') {
-        if (currentTime < eventDay.anStartTime || currentTime > eventDay.anEndTime) {
-          return res.status(400).json({ 
-            error: `Afternoon attendance can only be marked between ${eventDay.anStartTime} - ${eventDay.anEndTime}` 
-          });
-        }
-      }
+      return c.json({ error: 'Afternoon session is not enabled for this day' }, 400)
     }
 
     // Create or update attendance record
@@ -168,7 +151,7 @@ router.post('/mark', requireAdminOrBrigadeLead, [
       },
       update: {
         status,
-        markedBy: req.user.id,
+        markedBy: user.id,
         markedAt: new Date()
       },
       create: {
@@ -176,7 +159,7 @@ router.post('/mark', requireAdminOrBrigadeLead, [
         eventDayId,
         session,
         status,
-        markedBy: req.user.id
+        markedBy: user.id
       },
       include: {
         student: {
@@ -190,36 +173,25 @@ router.post('/mark', requireAdminOrBrigadeLead, [
           }
         }
       }
-    });
+    })
 
-    // Send real-time notification
-    req.io.to(`user-${student.userId}`).emit('attendance-marked', {
-      record: attendanceRecord,
-      message: `Attendance marked for ${session} session`
-    });
-
-    logger.info(`Attendance marked: ${student.tempRollNumber} - ${session} - ${status} by ${req.user.email}`);
-    res.json(attendanceRecord);
+    return c.json(attendanceRecord)
   } catch (error) {
-    logger.error('Mark attendance error:', error);
-    res.status(500).json({ error: 'Failed to mark attendance' });
+    console.error('Mark attendance error:', error)
+    return c.json({ error: 'Failed to mark attendance' }, 500)
   }
-});
+})
 
 // Bulk mark attendance
-router.post('/bulk-mark', requireAdminOrBrigadeLead, [
-  body('eventDayId').isLength({ min: 1 }).withMessage('Event day ID is required'),
-  body('session').isIn(['FN', 'AN']).withMessage('Invalid session'),
-  body('studentIds').isArray().withMessage('Student IDs must be an array'),
-  body('status').optional().isIn(['PRESENT', 'ABSENT', 'LATE']).withMessage('Invalid status')
-], async (req, res) => {
+app.post('/bulk-mark', requireAdminOrBrigadeLead, async (c) => {
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
+    const { studentIds, eventDayId, session, status = 'PRESENT' } = await c.req.json()
+    const user = c.get('user')
+    const prisma = c.get('prisma')
 
-    const { studentIds, eventDayId, session, status = 'PRESENT' } = req.body;
+    if (!studentIds || !Array.isArray(studentIds) || !eventDayId || !session) {
+      return c.json({ error: 'Student IDs array, event day ID, and session are required' }, 400)
+    }
 
     // Verify all students exist and user has permission
     const students = await prisma.student.findMany({
@@ -228,54 +200,32 @@ router.post('/bulk-mark', requireAdminOrBrigadeLead, [
         isActive: true
       },
       include: { brigade: true }
-    });
+    })
 
     if (students.length !== studentIds.length) {
-      return res.status(400).json({ error: 'Some students not found' });
+      return c.json({ error: 'Some students not found' }, 400)
     }
 
     // Check permissions for brigade leads
-    if (req.user.role === 'BRIGADE_LEAD') {
+    if (user.role === 'BRIGADE_LEAD') {
       const brigades = await prisma.brigade.findMany({
-        where: { leaderId: req.user.id }
-      });
-      const brigadeIds = brigades.map(b => b.id);
+        where: { leaderId: user.id }
+      })
+      const brigadeIds = brigades.map(b => b.id)
       
-      const unauthorizedStudents = students.filter(s => !brigadeIds.includes(s.brigadeId));
+      const unauthorizedStudents = students.filter(s => !brigadeIds.includes(s.brigadeId))
       if (unauthorizedStudents.length > 0) {
-        return res.status(403).json({ error: 'Access denied to some students' });
+        return c.json({ error: 'Access denied to some students' }, 403)
       }
     }
 
     // Check event day
     const eventDay = await prisma.eventDay.findUnique({
       where: { id: eventDayId }
-    });
+    })
 
     if (!eventDay || !eventDay.isActive) {
-      return res.status(404).json({ error: 'Event day not found or inactive' });
-    }
-
-    // Check time constraints (same as single mark)
-    const now = new Date();
-    const currentTime = now.toTimeString().substring(0, 5);
-    const currentDate = now.toDateString();
-    const eventDate = eventDay.date.toDateString();
-
-    if (currentDate === eventDate) {
-      if (session === 'FN') {
-        if (currentTime < eventDay.fnStartTime || currentTime > eventDay.fnEndTime) {
-          return res.status(400).json({ 
-            error: `Forenoon attendance can only be marked between ${eventDay.fnStartTime} - ${eventDay.fnEndTime}` 
-          });
-        }
-      } else if (session === 'AN') {
-        if (currentTime < eventDay.anStartTime || currentTime > eventDay.anEndTime) {
-          return res.status(400).json({ 
-            error: `Afternoon attendance can only be marked between ${eventDay.anStartTime} - ${eventDay.anEndTime}` 
-          });
-        }
-      }
+      return c.json({ error: 'Event day not found or inactive' }, 404)
     }
 
     // Bulk create/update attendance records
@@ -284,9 +234,9 @@ router.post('/bulk-mark', requireAdminOrBrigadeLead, [
       eventDayId,
       session,
       status,
-      markedBy: req.user.id,
+      markedBy: user.id,
       markedAt: new Date()
-    }));
+    }))
 
     // Use transaction for bulk operations
     const results = await prisma.$transaction(
@@ -307,100 +257,16 @@ router.post('/bulk-mark', requireAdminOrBrigadeLead, [
           create: data
         })
       )
-    );
+    )
 
-    // Send notifications to affected students
-    students.forEach(student => {
-      if (student.userId) {
-        req.io.to(`user-${student.userId}`).emit('attendance-marked', {
-          message: `Attendance marked for ${session} session`
-        });
-      }
-    });
-
-    logger.info(`Bulk attendance marked: ${studentIds.length} students - ${session} - ${status} by ${req.user.email}`);
-    res.json({ 
+    return c.json({ 
       message: `Attendance marked for ${results.length} students`,
       records: results
-    });
+    })
   } catch (error) {
-    logger.error('Bulk mark attendance error:', error);
-    res.status(500).json({ error: 'Failed to mark bulk attendance' });
+    console.error('Bulk mark attendance error:', error)
+    return c.json({ error: 'Failed to mark bulk attendance' }, 500)
   }
-});
+})
 
-// Get attendance summary for event day
-router.get('/summary/:eventDayId', async (req, res) => {
-  try {
-    const { eventDayId } = req.params;
-    const { session } = req.query;
-
-    let whereClause = { eventDayId };
-
-    // Role-based filtering
-    if (req.user.role === 'BRIGADE_LEAD') {
-      const brigades = await prisma.brigade.findMany({
-        where: { leaderId: req.user.id }
-      });
-      const brigadeIds = brigades.map(b => b.id);
-      
-      whereClause.student = {
-        brigadeId: { in: brigadeIds }
-      };
-    }
-
-    if (session) {
-      whereClause.session = session;
-    }
-
-    const records = await prisma.attendanceRecord.findMany({
-      where: whereClause,
-      include: {
-        student: {
-          include: {
-            brigade: true
-          }
-        }
-      }
-    });
-
-    // Calculate statistics
-    const totalRecords = records.length;
-    const presentCount = records.filter(r => r.status === 'PRESENT').length;
-    const absentCount = records.filter(r => r.status === 'ABSENT').length;
-    const lateCount = records.filter(r => r.status === 'LATE').length;
-
-    // Brigade-wise statistics
-    const brigadeStats = {};
-    records.forEach(record => {
-      const brigadeName = record.student.brigade?.name || 'No Brigade';
-      if (!brigadeStats[brigadeName]) {
-        brigadeStats[brigadeName] = {
-          total: 0,
-          present: 0,
-          absent: 0,
-          late: 0
-        };
-      }
-      brigadeStats[brigadeName].total++;
-      brigadeStats[brigadeName][record.status.toLowerCase()]++;
-    });
-
-    res.json({
-      summary: {
-        totalRecords,
-        presentCount,
-        absentCount,
-        lateCount,
-        presentPercentage: totalRecords > 0 ? ((presentCount / totalRecords) * 100).toFixed(2) : 0
-      },
-      brigadeStats,
-      records
-    });
-  } catch (error) {
-    logger.error('Get attendance summary error:', error);
-    res.status(500).json({ error: 'Failed to fetch attendance summary' });
-  }
-});
-
-export default router;
+export default app

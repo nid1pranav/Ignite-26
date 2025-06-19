@@ -1,0 +1,32 @@
+name = "ignite-2026-backend"
+main = "src/index.js"
+compatibility_date = "2024-01-15"
+compatibility_flags = ["nodejs_compat"]
+
+[env.production]
+name = "ignite-2026-backend"
+
+[env.staging]
+name = "ignite-2026-backend-staging"
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "ignite-2026-prod"
+database_id = "your-d1-database-id"
+
+[[env.staging.d1_databases]]
+binding = "DB"
+database_name = "ignite-2026-staging"
+database_id = "your-d1-staging-database-id"
+
+[vars]
+NODE_ENV = "production"
+JWT_SECRET = "your-jwt-secret-here"
+CORS_ORIGIN = "https://your-frontend-domain.pages.dev"
+LOG_LEVEL = "info"
+
+# For local development
+[[d1_databases]]
+binding = "DB"
+database_name = "ignite-2026-local"
+database_id = "local"

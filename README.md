@@ -1,6 +1,6 @@
 # Ignite 2026 - Attendance Management System
 
-A comprehensive attendance management system built for Kumaraguru Institutions' Ignite 2026 technical fest.
+A comprehensive attendance management system built for Kumaraguru Institutions' Ignite 2026 technical fest, deployed on Cloudflare.
 
 ## Features
 
@@ -10,20 +10,19 @@ A comprehensive attendance management system built for Kumaraguru Institutions' 
 - **Event Management**: Create and manage multi-day events
 - **Analytics Dashboard**: Comprehensive attendance reports and analytics
 - **Bulk Operations**: Upload students via Excel/CSV files
-- **Notifications**: Real-time notifications for all users
+- **Notifications**: System-wide notifications for all users
 - **Responsive Design**: Works on desktop and mobile devices
 
 ## Tech Stack
 
-### Backend
-- Node.js with Express
-- PostgreSQL with Prisma ORM
+### Backend (Cloudflare Workers)
+- Hono.js web framework
+- Cloudflare D1 (SQLite) database
+- Prisma ORM with D1 adapter
 - JWT Authentication
-- Socket.io for real-time features
-- Winston for logging
-- Multer for file uploads
+- Modular architecture
 
-### Frontend
+### Frontend (Cloudflare Pages)
 - React 18 with TypeScript
 - Tailwind CSS for styling
 - Radix UI components
@@ -31,76 +30,120 @@ A comprehensive attendance management system built for Kumaraguru Institutions' 
 - Recharts for analytics
 - Sonner for notifications
 
+## Deployment Architecture
+
+```
+Frontend (Cloudflare Pages) → Backend (Cloudflare Workers) → Database (Cloudflare D1)
+```
+
 ## Getting Started
 
 ### Prerequisites
-- Node.js 18+ 
-- PostgreSQL 14+
-- npm or yarn
+- Node.js 18+
+- Cloudflare account
+- Wrangler CLI
 
-### Installation
+### Backend Setup
 
-1. Clone the repository
-```bash
-git clone <repository-url>
-cd ignite-2026
-```
-
-2. Install backend dependencies
+1. **Navigate to backend directory**
 ```bash
 cd backend
+```
+
+2. **Install dependencies**
+```bash
 npm install
 ```
 
-3. Install frontend dependencies
+3. **Login to Cloudflare**
+```bash
+npm run cf:login
+```
+
+4. **Create D1 database**
+```bash
+npm run cf:d1:create
+```
+
+5. **Update wrangler.toml with your database ID**
+
+6. **Run migrations and seed data**
+```bash
+npm run db:migrate
+npm run db:seed
+```
+
+7. **Start development server**
+```bash
+npm run dev
+```
+
+### Frontend Setup
+
+1. **Navigate to frontend directory**
 ```bash
 cd frontend
+```
+
+2. **Install dependencies**
+```bash
 npm install
 ```
 
-4. Set up environment variables
+3. **Create environment file**
 ```bash
-# Backend
-cp backend/.env.ex backend/.env
-# Update database credentials and other settings
+cp .env.example .env
 ```
 
-5. Set up the database
+4. **Update API URL in .env**
 ```bash
-cd backend
-npx prisma generate
-npx prisma db push
-npx prisma db seed
+VITE_API_URL=http://localhost:8787/api
 ```
 
-6. Start the development servers
+5. **Start development server**
 ```bash
-# Backend (Terminal 1)
-cd backend
 npm run dev
+```
 
-# Frontend (Terminal 2)
+## Deployment
+
+### Backend Deployment (Cloudflare Workers)
+
+1. **Deploy to staging**
+```bash
+cd backend
+npm run deploy:staging
+```
+
+2. **Deploy to production**
+```bash
+npm run deploy
+```
+
+3. **Set environment variables in Cloudflare dashboard**
+- `JWT_SECRET`
+- `NODE_ENV`
+- `CORS_ORIGIN`
+
+### Frontend Deployment (Cloudflare Pages)
+
+1. **Build the application**
+```bash
 cd frontend
-npm run dev
+npm run build
 ```
+
+2. **Deploy to Cloudflare Pages**
+- Connect your GitHub repository to Cloudflare Pages
+- Set build command: `npm run build`
+- Set build output directory: `dist`
+- Set environment variable: `VITE_API_URL=https://your-worker.your-subdomain.workers.dev/api`
 
 ## Default Credentials
 
 - **Admin**: admin@ignite2026.com / admin123
 - **Brigade Lead**: lead1@ignite2026.com / lead123
 - **Student**: IG2026001 / student123
-
-## Deployment
-
-### Backend Deployment
-1. Set production environment variables
-2. Run database migrations
-3. Build and start the server
-
-### Frontend Deployment
-1. Update API URL in environment
-2. Build the application
-3. Deploy to static hosting
 
 ## API Documentation
 
@@ -114,15 +157,78 @@ The API follows RESTful conventions with the following main endpoints:
 - `/api/attendance` - Attendance tracking
 - `/api/analytics` - Analytics and reports
 - `/api/notifications` - Notifications
-- `/api/uploads` - File uploads
+
+## Database Schema
+
+The system uses Cloudflare D1 (SQLite) with the following main tables:
+
+- `users` - User accounts and authentication
+- `students` - Student information and roll numbers
+- `brigades` - Brigade organization
+- `events` - Event management
+- `event_days` - Daily event sessions
+- `attendance_records` - Attendance tracking
+- `notifications` - System notifications
+
+## Environment Variables
+
+### Backend (Cloudflare Workers)
+- `JWT_SECRET` - Secret key for JWT tokens
+- `NODE_ENV` - Environment (production/development)
+- `CORS_ORIGIN` - Frontend domain for CORS
+- `LOG_LEVEL` - Logging level
+
+### Frontend (Cloudflare Pages)
+- `VITE_API_URL` - Backend API URL
+
+## Monitoring and Logs
+
+- **Workers Analytics**: Monitor performance in Cloudflare dashboard
+- **D1 Analytics**: Database usage and performance metrics
+- **Pages Analytics**: Frontend performance and usage
+- **Real-time Logs**: Available in Cloudflare dashboard
+
+## Security Features
+
+- JWT-based authentication
+- Role-based access control
+- CORS protection
+- Input validation
+- SQL injection prevention (Prisma ORM)
+- Rate limiting (Cloudflare built-in)
+
+## Performance Optimizations
+
+- **Edge Computing**: Workers run at Cloudflare edge locations
+- **Global CDN**: Pages served from global CDN
+- **Database Optimization**: Efficient queries with Prisma
+- **Caching**: Cloudflare automatic caching
+- **Compression**: Automatic asset compression
+
+## Backup and Recovery
+
+```bash
+# Backup D1 database
+npx wrangler d1 export ignite-2026-prod --output=backup.sql
+
+# Restore from backup
+npx wrangler d1 execute ignite-2026-prod --file=backup.sql
+```
 
 ## Contributing
 
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes
-4. Add tests if applicable
+4. Test thoroughly
 5. Submit a pull request
+
+## Support
+
+For issues and questions:
+1. Check the documentation
+2. Review Cloudflare Workers/Pages documentation
+3. Create an issue in the repository
 
 ## License
 

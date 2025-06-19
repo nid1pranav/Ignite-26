@@ -1,26 +1,19 @@
-import express from 'express';
-import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
-import { PrismaClient } from '@prisma/client';
-import { body, validationResult } from 'express-validator';
-import { logger } from '../utils/logger.js';
+import { Hono } from 'hono'
+import bcrypt from 'bcryptjs'
+import jwt from 'jsonwebtoken'
 
-const router = express.Router();
-const prisma = new PrismaClient();
+const app = new Hono()
 
 // Login
-router.post('/login', [
-  body('email').isEmail().normalizeEmail(),
-  body('password').isLength({ min: 1 }).withMessage('Password is required'),
-], async (req, res) => {
+app.post('/login', async (c) => {
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
+    const { email, password } = await c.req.json()
+    
+    if (!email || !password) {
+      return c.json({ error: 'Email and password are required' }, 400)
     }
 
-    const { email, password } = req.body;
-
+    const prisma = c.get('prisma')
     const user = await prisma.user.findUnique({
       where: { email },
       include: {
@@ -31,32 +24,30 @@ router.post('/login', [
         },
         brigadeLeadBrigades: true
       }
-    });
+    })
 
     if (!user || !user.isActive) {
-      return res.status(401).json({ error: 'Invalid credentials' });
+      return c.json({ error: 'Invalid credentials' }, 401)
     }
 
-    const isValidPassword = await bcrypt.compare(password, user.password);
+    const isValidPassword = await bcrypt.compare(password, user.password)
     if (!isValidPassword) {
-      return res.status(401).json({ error: 'Invalid credentials' });
+      return c.json({ error: 'Invalid credentials' }, 401)
     }
 
     // Update last login
     await prisma.user.update({
       where: { id: user.id },
       data: { lastLogin: new Date() }
-    });
+    })
 
     const token = jwt.sign(
       { userId: user.id, role: user.role },
-      process.env.JWT_SECRET,
+      c.env.JWT_SECRET,
       { expiresIn: '24h' }
-    );
+    )
 
-    logger.info(`User login: ${user.email} (${user.role})`);
-
-    res.json({
+    return c.json({
       token,
       user: {
         id: user.id,
@@ -67,58 +58,53 @@ router.post('/login', [
         student: user.student,
         brigades: user.brigadeLeadBrigades
       }
-    });
+    })
   } catch (error) {
-    logger.error('Login error:', error);
-    res.status(500).json({ error: 'Login failed' });
+    console.error('Login error:', error)
+    return c.json({ error: 'Login failed' }, 500)
   }
-});
+})
 
 // Student login with roll number
-router.post('/student-login', [
-  body('tempRollNumber').isLength({ min: 1 }).withMessage('Roll number is required'),
-  body('password').isLength({ min: 1 }).withMessage('Password is required'),
-], async (req, res) => {
+app.post('/student-login', async (c) => {
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
+    const { tempRollNumber, password } = await c.req.json()
+    
+    if (!tempRollNumber || !password) {
+      return c.json({ error: 'Roll number and password are required' }, 400)
     }
 
-    const { tempRollNumber, password } = req.body;
-
+    const prisma = c.get('prisma')
     const student = await prisma.student.findUnique({
       where: { tempRollNumber },
       include: {
         user: true,
         brigade: true
       }
-    });
+    })
 
     if (!student || !student.user || !student.user.isActive) {
-      return res.status(401).json({ error: 'Invalid credentials' });
+      return c.json({ error: 'Invalid credentials' }, 401)
     }
 
-    const isValidPassword = await bcrypt.compare(password, student.user.password);
+    const isValidPassword = await bcrypt.compare(password, student.user.password)
     if (!isValidPassword) {
-      return res.status(401).json({ error: 'Invalid credentials' });
+      return c.json({ error: 'Invalid credentials' }, 401)
     }
 
     // Update last login
     await prisma.user.update({
       where: { id: student.user.id },
       data: { lastLogin: new Date() }
-    });
+    })
 
     const token = jwt.sign(
       { userId: student.user.id, role: student.user.role },
-      process.env.JWT_SECRET,
+      c.env.JWT_SECRET,
       { expiresIn: '24h' }
-    );
+    )
 
-    logger.info(`Student login: ${tempRollNumber}`);
-
-    res.json({
+    return c.json({
       token,
       user: {
         id: student.user.id,
@@ -131,24 +117,26 @@ router.post('/student-login', [
           user: undefined
         }
       }
-    });
+    })
   } catch (error) {
-    logger.error('Student login error:', error);
-    res.status(500).json({ error: 'Login failed' });
+    console.error('Student login error:', error)
+    return c.json({ error: 'Login failed' }, 500)
   }
-});
+})
 
 // Get current user
-router.get('/me', async (req, res) => {
+app.get('/me', async (c) => {
   try {
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
+    const authHeader = c.req.header('authorization')
+    const token = authHeader && authHeader.split(' ')[1]
 
     if (!token) {
-      return res.status(401).json({ error: 'Access token required' });
+      return c.json({ error: 'Access token required' }, 401)
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, c.env.JWT_SECRET)
+    const prisma = c.get('prisma')
+    
     const user = await prisma.user.findUnique({
       where: { id: decoded.userId },
       include: {
@@ -159,13 +147,13 @@ router.get('/me', async (req, res) => {
         },
         brigadeLeadBrigades: true
       }
-    });
+    })
 
     if (!user || !user.isActive) {
-      return res.status(404).json({ error: 'User not found' });
+      return c.json({ error: 'User not found' }, 404)
     }
 
-    res.json({
+    return c.json({
       id: user.id,
       email: user.email,
       firstName: user.firstName,
@@ -173,11 +161,11 @@ router.get('/me', async (req, res) => {
       role: user.role,
       student: user.student,
       brigades: user.brigadeLeadBrigades
-    });
+    })
   } catch (error) {
-    logger.error('Get user error:', error);
-    res.status(500).json({ error: 'Failed to get user information' });
+    console.error('Get user error:', error)
+    return c.json({ error: 'Failed to get user information' }, 500)
   }
-});
+})
 
-export default router;
+export default app
